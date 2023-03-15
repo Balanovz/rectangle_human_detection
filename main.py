@@ -1,6 +1,13 @@
 import cv2
+import math
+import time
 import mediapipe as mp
+from ultralytics import YOLO
 
+
+# for box tracking
+model = YOLO('../YOLOWeights/yolov8n.pt')
+# for human skeleton
 mpDraw = mp.solutions.drawing_utils
 mpPose = mp.solutions.pose
 pose = mpPose.Pose(static_image_mode=False,
@@ -9,70 +16,42 @@ pose = mpPose.Pose(static_image_mode=False,
                    min_tracking_confidence=0.5)
 
 
-def findPose(img, draw=True):
-    imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+def getHumanSkeletonCoordinates(frame, show=False):
+    imgRGB = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = pose.process(imgRGB)
-    if results.pose_landmarks:
-        if draw:
-            mpDraw.draw_landmarks(img, results.pose_landmarks,
-                                  mpPose.POSE_CONNECTIONS)
-            mpDraw,
-    return img
-
-
-def findPosition(img, draw=True, bboxWithHands=False):
     lmList = []
-    bboxInfo = {}
-    imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    results = pose.process(imgRGB)
     if results.pose_landmarks:
-        for id, lm in enumerate(results.pose_landmarks.landmark):
-            h, w, c = img.shape
+        for lm in results.pose_landmarks.landmark:
+            h, w, c = frame.shape
             cx, cy = int(lm.x * w), int(lm.y * h)
-            lmList.append([id, cx, cy])
+            lmList.append((cx, cy))
 
-        ad = abs(lmList[12][1] - lmList[11][1]) // 2
-        if bboxWithHands:
-            x1 = lmList[16][1] - ad
-            x2 = lmList[15][1] + ad
-        else:
-            x1 = lmList[12][1] - ad
-            x2 = lmList[11][1] + ad
+        if show:
+            mpDraw.draw_landmarks(frame, results.pose_landmarks, mpPose.POSE_CONNECTIONS)
 
-        y2 = lmList[29][2] + ad
-        y1 = lmList[1][2] - ad
-        bbox = (x1, y1, x2 - x1, y2 - y1)
-        cx, cy = bbox[0] + (bbox[2] // 2), \
-                 bbox[1] + bbox[3] // 2
-
-        bboxInfo = {"bbox": bbox, "center": (cx, cy)}
-
-        if draw:
-            cv2.rectangle(img, bbox, (255, 0, 255), 3)
-            cv2.circle(img, (cx, cy), 5, (255, 0, 0), cv2.FILLED)
-
-    return lmList, bboxInfo
+        return lmList
 
 
-def findStraightMeasurement(lmList, unit):
-    shoulders_length = abs(lmList[12][1] - lmList[11][1]) * unit
-    hips_length = abs(lmList[23][1] - lmList[24][1]) * unit
-    return {'shoulders': shoulders_length, 'hips': hips_length}
+def getBoxTrackingCoordinates(frame, show=False):
+    results = model(frame)
+    for r in results:
+        boxes = r.boxes
+        for box in boxes:
+            x1, y1, x2, y2 = box.xyxy[0]
+            # if name is person
+            if box.cls[0] == 0:
+                print(f'x1: {x1} y1: {y1} x2: {x2} y2:{y2}')
+                if show:
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (163, 83, 224), 1)
+                return x1, y1, x2, y2
 
 
-def findProfileMeasurement(bbox, unit):
-    return bbox[2] * unit
-
-
-def startRecord(ip: str):
-    cap = cv2.VideoCapture(ip)
+def startMeasurements(camera_ip: str, real_height: float, show=False):
+    cap = cv2.VideoCapture(camera_ip)
     cap.set(3, 640)
     cap.set(4, 480)
-    real_height = float(input('Enter person height:\t'))
-    is_straight_view = True
-    shoulder_lengths = []
-    hip_lengths = []
-    human_widths = []
+    shoulder_lengths, hip_lengths, human_widths, human_heights = [], [], [], []
+    timing = time.time()
 
     while cap.isOpened():
         success, frame = cap.read()
@@ -80,62 +59,83 @@ def startRecord(ip: str):
             break
 
         frame = cv2.flip(cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE), 0)
-        frame = findPose(frame)
-        lmList, bboxInfo = findPosition(frame)
-        cv2.imshow('output', frame)
-        if bboxInfo:
-            unit = real_height / bboxInfo['bbox'][3]
-            if is_straight_view:
-                human_body_part = findStraightMeasurement(lmList, unit)
-                print(f'shoulders:\t{human_body_part["shoulders"]}')
-                shoulder_lengths.append(human_body_part["shoulders"])
-                print(f'hips:\t{human_body_part["hips"]}')
-                hip_lengths.append(human_body_part["hips"])
-            else:
-                width = findProfileMeasurement(bboxInfo['bbox'], unit)
-                human_widths.append(width)
-                print(f'human width:\t{width}')
-        # TODO исправить изменение режима съемки нажатия на кнопку на другой сигнал
-        if cv2.waitKey(1) & 0xFF == ord(' '):
-            input()
-            is_straight_view = not is_straight_view
+        cv2.rectangle(frame, (0, 20), (550, 60), (255, 255, 255), -1)
+
+        if (time.time() - timing) < 10:
+            cv2.putText(frame, f'PREPARE FRONT (10 sec) {round(time.time() - timing, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 0), 2)
+
+        elif 10 <= (time.time() - timing) < 20:
+            # front view
+            print('estimating pose part')
+            cv2.putText(frame, f'REC FRONT (10 sec) {round(time.time() - timing - 10, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 255), 2)
+            lmList = getHumanSkeletonCoordinates(frame, show)
+            if lmList:
+                shoulder_lengths.append(math.hypot(lmList[12][0] - lmList[11][0], lmList[12][1] - lmList[11][1]))
+                hip_lengths.append(math.hypot(lmList[24][0] - lmList[23][0], lmList[24][1] - lmList[23][1]))
+
+        elif 20 <= (time.time() - timing) < 30:
+            cv2.putText(frame, f'PREPARE SIDE (10 sec) {round(time.time() - timing - 20, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 0), 2)
+
+        elif 30 <= time.time() - timing < 40:
+            # side view, 2
+            print('estimating width and height part')
+            cv2.putText(frame, f'REC SIDE (10 sec) {round(time.time() - timing - 30, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 255), 2)
+            box_coord = list(getBoxTrackingCoordinates(frame, show))
+            if box_coord:
+                human_widths.append(abs(box_coord[2] - box_coord[0]))
+                human_heights.append(abs(box_coord[3] - box_coord[1]))
+        else:
+            break
+
+        cv2.imshow('ai_clothing', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
     cv2.destroyAllWindows()
-    return shoulder_lengths, hip_lengths, human_widths
+
+    average_shoulders = sum(shoulder_lengths) / len(shoulder_lengths)
+    average_hips = sum(hip_lengths) / len(hip_lengths)
+    average_widths = sum(human_widths) / len(human_widths)
+    average_heights = sum(human_heights) / len(human_heights)
+
+    pix_to_cm = real_height / average_heights
+    ROUND_COEFFICIENT = 0.62940333494
+
+    shoulders_cm = pix_to_cm * average_shoulders
+    hips_cm = pix_to_cm * average_hips
+    width_cm = pix_to_cm * average_widths * ROUND_COEFFICIENT
+
+    return shoulders_cm, hips_cm, width_cm
 
 
-def getHumanInfo(shoulder_average: float, hip_average: float, width_average: float):
-    print(f'average length of shoulders:\t{shoulder_average}')
-    print(f'average length of hips:\t{hip_average}')
-    print(f'average length of widths:\t{width_average}')
+def getHumanInfo(shoulders: float, hips: float, width: float):
+    print(f'length of shoulders:\t{shoulders} cm')
+    print(f'length of hips:\t{hips} cm')
+    print(f'length of widths:\t{width} cm')
 
 
-def getAverageMeasurements(shoulder_lengths: list, hip_lengths: list, widths: list):
-    return dict(shoulders=sum(shoulder_lengths) / len(shoulder_lengths),
-                hips=sum(hip_lengths) / len(hip_lengths),
-                widths=sum(widths) / len(widths))
+def getMatchPercentInfo(first_data: list, second_data: list):
+    print(f'match percentage of shoulders:\t {min(first_data[0], second_data[0]) / max(first_data[0], second_data[0]) * 100} %')
+    print(f'match percentage of hips:\t  {min(first_data[1], second_data[1]) / max(first_data[1], second_data[1]) * 100} %')
+    print(f'match percentage of width:\t {min(first_data[2], second_data[2]) / max(first_data[2], second_data[2]) * 100} %')
 
 
-def getMatchPercentInfo(first_data: dict, second_data: dict):
-    print(f'match percentage of shoulders:\t {min(first_data["shoulders"], second_data["shoulders"]) / max(first_data["shoulders"], second_data["shoulders"]) * 100} %')
-    print(f'match percentage of hips:\t  {min(first_data["hips"], second_data["hips"]) / max(first_data["hips"], second_data["hips"]) * 100} %')
-    print(f'match percentage of width:\t {min(first_data["widths"], second_data["widths"]) / max(first_data["widths"], second_data["widths"]) * 100} %')
+def main():
+    ip = 'http:/192.168.1.106:4747/video'
+    height = float(input('Enter first person height:\t'))
+    first_shoulders, first_hips, first_width = startMeasurements(ip, height, True)
+
+    print('\nfirst person measurements:')
+    getHumanInfo(first_shoulders, first_hips, first_width)
+
+    height = float(input('Enter second person height:\t'))
+    second_shoulders, second_hips, second_width = startMeasurements(ip, height, True)
+    print('\nsecond person measurements:')
+    getHumanInfo(second_shoulders, second_hips, second_width)
+
+    getMatchPercentInfo([first_shoulders, first_hips, first_width], [second_shoulders, second_hips, second_width])
 
 
 if __name__ == '__main__':
-    camera_ip = 'http:/192.168.1.106:4747/video'
-    shoulders_lengths, hips_lengths, widths = startRecord(camera_ip)
-    first_average = getAverageMeasurements(shoulders_lengths, hips_lengths, widths)
-
-    print('\nfirst person measurement:')
-    getHumanInfo(first_average['shoulders'], first_average['hips'], first_average['widths'])
-
-    shoulders_lengths, hips_lengths, widths = startRecord(camera_ip)
-    second_average = getAverageMeasurements(shoulders_lengths, hips_lengths, widths)
-    print('\nsecond person:')
-    getHumanInfo(second_average['shoulders'], second_average['hips'], second_average['widths'])
-
-    getMatchPercentInfo(first_average, second_average)
+    main()
