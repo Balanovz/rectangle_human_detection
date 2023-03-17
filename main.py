@@ -4,7 +4,6 @@ import time
 import mediapipe as mp
 from ultralytics import YOLO
 
-
 # for box tracking
 model = YOLO('../YOLOWeights/yolov8n.pt')
 # for human skeleton
@@ -62,25 +61,29 @@ def startMeasurements(camera_ip: str, real_height: float, show=False):
         cv2.rectangle(frame, (0, 20), (550, 60), (255, 255, 255), -1)
 
         if (time.time() - timing) < 10:
-            cv2.putText(frame, f'PREPARE FRONT (10 sec) {round(time.time() - timing, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 0), 2)
+            cv2.putText(frame, f'PREPARE FRONT (10 sec) {round(time.time() - timing, 2)}', (10, 50),
+                        cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 0), 2)
 
         elif 10 <= (time.time() - timing) < 20:
             # front view
             print('estimating pose part')
-            cv2.putText(frame, f'REC FRONT (10 sec) {round(time.time() - timing - 10, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 255), 2)
+            cv2.putText(frame, f'REC FRONT (10 sec) {round(time.time() - timing - 10, 2)}', (10, 50),
+                        cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 255), 2)
             lmList = getHumanSkeletonCoordinates(frame, show)
             if lmList:
                 shoulder_lengths.append(math.hypot(lmList[12][0] - lmList[11][0], lmList[12][1] - lmList[11][1]))
                 hip_lengths.append(math.hypot(lmList[24][0] - lmList[23][0], lmList[24][1] - lmList[23][1]))
 
         elif 20 <= (time.time() - timing) < 30:
-            cv2.putText(frame, f'PREPARE SIDE (10 sec) {round(time.time() - timing - 20, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 0), 2)
+            cv2.putText(frame, f'PREPARE SIDE (10 sec) {round(time.time() - timing - 20, 2)}', (10, 50),
+                        cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 0), 2)
 
         elif 30 <= time.time() - timing < 40:
             # side view, 2
             print('estimating width and height part')
-            cv2.putText(frame, f'REC SIDE (10 sec) {round(time.time() - timing - 30, 2)}', (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 255), 2)
-            box_coord = list(getBoxTrackingCoordinates(frame, show))
+            cv2.putText(frame, f'REC SIDE (10 sec) {round(time.time() - timing - 30, 2)}', (10, 50),
+                        cv2.FONT_HERSHEY_PLAIN, 1.75, (0, 0, 255), 2)
+            box_coord = getBoxTrackingCoordinates(frame, show)
             if box_coord:
                 human_widths.append(abs(box_coord[2] - box_coord[0]))
                 human_heights.append(abs(box_coord[3] - box_coord[1]))
@@ -93,6 +96,10 @@ def startMeasurements(camera_ip: str, real_height: float, show=False):
 
     cap.release()
     cv2.destroyAllWindows()
+
+    if not shoulder_lengths or hip_lengths or human_widths or human_heights:
+        print("one of the measurement isn't completed")
+        return len(shoulder_lengths), len(hip_lengths), len(human_widths)
 
     average_shoulders = sum(shoulder_lengths) / len(shoulder_lengths)
     average_hips = sum(hip_lengths) / len(hip_lengths)
@@ -116,9 +123,12 @@ def getHumanInfo(shoulders: float, hips: float, width: float):
 
 
 def getMatchPercentInfo(first_data: list, second_data: list):
-    print(f'match percentage of shoulders:\t {min(first_data[0], second_data[0]) / max(first_data[0], second_data[0]) * 100} %')
-    print(f'match percentage of hips:\t  {min(first_data[1], second_data[1]) / max(first_data[1], second_data[1]) * 100} %')
-    print(f'match percentage of width:\t {min(first_data[2], second_data[2]) / max(first_data[2], second_data[2]) * 100} %')
+    shoulders_match = min(first_data[0], second_data[0]) / max(first_data[0], second_data[0]) * 100 if first_data[0] and second_data[0] else 0
+    hips_match = min(first_data[1], second_data[1]) / max(first_data[1], second_data[1]) * 100 if first_data[1] and second_data[1] else 0
+    width_match = min(first_data[2], second_data[2]) / max(first_data[2], second_data[2]) * 100 if first_data[2] and second_data[2] else 0
+    print(f'\nmatch percentage of shoulders:\t {shoulders_match} %')
+    print(f'match percentage of hips:\t  {hips_match} %')
+    print(f'match percentage of width:\t {width_match} %')
 
 
 def main():
@@ -131,6 +141,7 @@ def main():
 
     height = float(input('Enter second person height:\t'))
     second_shoulders, second_hips, second_width = startMeasurements(ip, height, True)
+
     print('\nsecond person measurements:')
     getHumanInfo(second_shoulders, second_hips, second_width)
 
